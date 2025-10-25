@@ -1,1 +1,62 @@
-http
+import face_recognition
+import cv2
+import os
+import numpy as np
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# 학습용 사진 폴더
+known_dir = "test"
+# 확인할 사진 폴더
+unknown_dir = "test1"
+
+# 학습 데이터 로딩
+known_encodings = []
+known_names = []
+
+for filename in os.listdir(known_dir):
+    if filename.lower().endswith((".png", ".jpg", ".jpeg")):
+        path = os.path.join(known_dir, filename)
+        image = face_recognition.load_image_file(path)
+        encodings = face_recognition.face_encodings(image)
+        if encodings:
+            known_encodings.append(encodings[0])
+            known_names.append("odegard")  # 학습자 이름 고정
+
+# 확인할 이미지 처리
+for filename in sorted(os.listdir(unknown_dir)):
+    if filename.lower().endswith((".png", ".jpg", ".jpeg")):
+        path = os.path.join(unknown_dir, filename)
+        unknown_image = face_recognition.load_image_file(path)
+        unknown_image = cv2.cvtColor(np.array(unknown_image), cv2.COLOR_RGB2BGR)
+
+        face_locations = face_recognition.face_locations(unknown_image)
+        face_encodings = face_recognition.face_encodings(unknown_image, face_locations)
+
+        for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
+            # 얼굴 거리 계산
+            distances = face_recognition.face_distance(known_encodings, face_encoding)
+            if len(distances) > 0:
+                best_match_index = np.argmin(distances)
+                similarity = max(0, 1 - distances[best_match_index])  # 1에 가까울수록 유사
+                name = "Unknown"
+                if similarity > 0.6:  # 유사도 임계값 조정 가능
+                    name = known_names[best_match_index]
+                similarity_percent = int(similarity * 100)
+            else:
+                name = "Unknown"
+                similarity_percent = 0
+
+            # 얼굴에 사각박스 그리기
+            cv2.rectangle(unknown_image, (left, top), (right, bottom), (0, 255, 0), 2)
+            cv2.putText(unknown_image, f"{name} ({similarity_percent}%)", (left, top-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+
+        # 화면 크기 조정
+        display_image = cv2.resize(unknown_image, (800, 600))
+        cv2.imshow("Face Recognition", display_image)
+
+        # 키 입력 대기 (자동 종료 없음)
+        cv2.waitKey(0)
+
+cv2.destroyAllWindows()

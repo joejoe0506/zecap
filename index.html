@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>얼굴 인식 출석 시스템 (웹)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin:0; background:#f6f7f9; color:#222; }
+    header { padding:12px 16px; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.06); position:sticky; top:0; }
+    main { max-width:820px; margin:24px auto; padding:0 16px; }
+    .card { background:#fff; border-radius:16px; padding:24px; box-shadow:0 8px 24px rgba(0,0,0,.06); }
+    .row { display:flex; gap:12px; align-items:center; margin-top:8px; }
+    .row > label { min-width:88px; }
+    input[type="text"], input[type="password"] {
+      width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:10px;
+    }
+    button {
+      padding:10px 14px; border:0; border-radius:12px; background:#111827; color:#fff; cursor:pointer;
+    }
+    button.secondary { background:#374151; }
+    button.ghost { background:#e5e7eb; color:#111827; }
+    .actions { display:flex; gap:8px; margin-top:12px; }
+    .hidden { display:none; }
+    .status { margin-top:8px; min-height:22px; }
+    video, canvas { width:100%; max-width:640px; border-radius:12px; background:#000; }
+    .logbox {
+      width:100%; height:320px; padding:12px; border:1px solid #ddd; border-radius:10px; background:#fafafa; overflow:auto; white-space:pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <header><strong>얼굴 인식 출석 시스템 (웹)</strong></header>
+  <main>
+
+    <!-- 로그인 -->
+    <section id="page-login" class="card">
+      <h2>로그인</h2>
+      <div class="row"><label>아이디</label><input id="login-userid" type="text" /></div>
+      <div class="row"><label>비밀번호</label><input id="login-password" type="password" /></div>
+      <div id="login-status" class="status"></div>
+      <div class="actions">
+        <button id="btn-login">로그인</button>
+        <button class="ghost" id="goto-register">회원가입</button>
+      </div>
+    </section>
+
+    <!-- 회원가입 -->
+    <section id="page-register" class="card hidden">
+      <h2>사용자 등록</h2>
+      <div class="row"><label>아이디</label><input id="reg-userid" type="text" /></div>
+      <div class="row"><label>비밀번호</label><input id="reg-password" type="password" /></div>
+      <div class="row"><label>학번</label><input id="reg-studentid" type="text" /></div>
+      <div class="row"><label>이름</label><input id="reg-name" type="text" /></div>
+      <div class="row"><label>관리자</label><input id="reg-admin" type="checkbox" /></div>
+      <p style="margin:6px 0 0 0; color:#555">등록 시 카메라에서 얼굴 사진 여러 장을 캡처하여 서버로 전송합니다.</p>
+      <div id="register-status" class="status"></div>
+      <div class="actions">
+        <button id="btn-register">등록</button>
+        <button class="ghost" id="back-to-login">로그인으로</button>
+      </div>
+    </section>
+
+    <!-- 얼굴 인식 -->
+    <section id="page-recog" class="card hidden">
+      <h2>얼굴 인식</h2>
+      <video id="preview" autoplay playsinline muted></video>
+      <canvas id="frame" class="hidden"></canvas>
+      <div id="recog-status" class="status"></div>
+      <div class="actions">
+        <button id="btn-start-recog">얼굴 인식 시작</button>
+        <button class="secondary" id="btn-logout">로그아웃</button>
+      </div>
+    </section>
+
+    <!-- 관리자 로그 -->
+    <section id="page-admin" class="card hidden">
+      <h2>관리자 출석 로그</h2>
+      <div id="admin-log" class="logbox">로그 로딩 중…</div>
+      <div class="actions">
+        <button id="btn-reload-logs">새로고침</button>
+        <button class="secondary" id="btn-admin-logout">로그아웃</button>
+      </div>
+    </section>
+
+    <!-- 출석 결과 -->
+    <section id="page-result" class="card hidden">
+      <h2 id="result-title">출석 결과</h2>
+      <div class="actions">
+        <button id="btn-back-to-recog">돌아가기</button>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const state = { token:null, currentUserId:null, isAdmin:false, mediaStream:null };
+    const $ = id => document.getElementById(id);
+    const pages = ["page-login","page-register","page-recog","page-admin","page-result"];
+    function showPage(id){ pages.forEach(p=>$(p).classList.toggle("hidden", p!==id)); }
+    $("goto-register").onclick = ()=>showPage("page-register");
+    $("back-to-login").onclick = ()=>showPage("page-login");
+
+    $("btn-login").onclick = async () => {
+      $("login-status").textContent = "로그인 중…";
+      try{
+        const res = await fetch("/api/login", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ user_id:$("login-userid").value.trim(), password:$("login-password").value })
+        });
+        const data = await res.json();
+        if(!res.ok || !data.ok) throw new Error(data.message || "로그인 실패");
+
+        state.token = data.token; state.currentUserId = data.student_id; state.isAdmin = !!data.is_admin;
+        $("login-status").textContent = `${data.name}님 환영합니다.`;
+        if(state.isAdmin){ await loadLogs(); showPage("page-admin"); }
+        else { await startCamera(); showPage("page-recog"); }
+      }catch(e){ $("login-status").textContent = e.message; }
+    };
+
+    $("btn-register").onclick = async () => {
+      const payload = {
+        user_id:$("reg-userid").value.trim(),
+        password:$("reg-password").value,
+        student_id:$("reg-studentid").value.trim(),
+        name:$("reg-name").value.trim(),
+        is_admin:$("reg-admin").checked
+      };
+      if(!payload.user_id || !payload.password || !payload.student_id || !payload.name){
+        $("register-status").textContent = "모든 항목을 입력해주세요."; return;
+      }
+      $("register-status").textContent = "카메라 준비 중…";
+      try{
+        await startCamera();
+        $("register-status").textContent = "얼굴 이미지 캡처 중…";
+        const frames = await captureFrames(10, 120);
+
+        const form = new FormData();
+        form.append("meta", new Blob([JSON.stringify(payload)], {type:"application/json"}));
+        frames.forEach((blob, i)=> form.append("images", blob, `face_${i}.jpg`));
+
+        const res = await fetch("/api/register", { method:"POST", body: form });
+        const data = await res.json();
+        if(!res.ok || !data.ok) throw new Error(data.message || "등록 실패");
+
+        $("register-status").textContent = "등록 완료! 로그인 화면으로 이동합니다.";
+        stopCamera(); setTimeout(()=>showPage("page-login"), 800);
+      }catch(e){
+        $("register-status").textContent = `등록 실패: ${e.message}`; stopCamera();
+      }
+    };
+
+    $("btn-logout").onclick = ()=>{ stopCamera(); state.token=null; state.currentUserId=null; state.isAdmin=false; showPage("page-login"); };
+    $("btn-admin-logout").onclick = ()=>{ state.token=null; state.currentUserId=null; state.isAdmin=false; showPage("page-login"); };
+
+    async function startCamera(){
+      if(state.mediaStream) return;
+      const stream = await navigator.mediaDevices.getUserMedia({ video:{width:640,height:480}, audio:false });
+      $("preview").srcObject = stream; state.mediaStream = stream;
+    }
+    function stopCamera(){
+      if(!state.mediaStream) return; state.mediaStream.getTracks().forEach(t=>t.stop());
+      state.mediaStream=null; $("preview").srcObject=null;
+    }
+    async function captureFrames(count=5, intervalMs=150){
+      const v=$("preview"), c=$("frame"); c.width=v.videoWidth||640; c.height=v.videoHeight||480;
+      const ctx=c.getContext("2d"); const blobs=[];
+      for(let i=0;i<count;i++){
+        ctx.drawImage(v,0,0,c.width,c.height);
+        const blob = await new Promise(r=>c.toBlob(r,"image/jpeg",0.9)); blobs.push(blob);
+        await new Promise(r=>setTimeout(r, intervalMs));
+      }
+      return blobs;
+    }
+
+    $("btn-start-recog").onclick = async ()=>{
+      $("recog-status").textContent = "얼굴 인식 중…";
+      try{
+        const [frame] = await captureFrames(1, 50);
+        const form = new FormData();
+        form.append("student_id", state.currentUserId||"");
+        form.append("image", frame, "shot.jpg");
+
+        const res = await fetch("/api/recognize", { method:"POST", body:form });
+        const data = await res.json();
+        if(!res.ok || !data.ok) throw new Error(data.message || "인식 실패");
+
+        if(data.matched){
+          $("recog-status").textContent = `${data.name}님 얼굴 인증 성공!`;
+          $("result-title").textContent = `${data.name}님 출석 완료`;
+          setTimeout(()=>showPage("page-result"), 800);
+        }else{
+          $("recog-status").textContent = "출석 실패. 얼굴 인증에 실패했습니다.";
+        }
+      }catch(e){ $("recog-status").textContent = e.message; }
+    };
+    $("btn-back-to-recog").onclick = ()=>showPage("page-recog");
+
+    $("btn-reload-logs").onclick = loadLogs;
+    async function loadLogs(){
+      try{
+        const res = await fetch("/api/logs");
+        const data = await res.json();
+        if(!res.ok || !data.ok) throw new Error(data.message || "로그 로드 실패");
+        $("admin-log").textContent = data.logs.join("\n\n");
+      }catch(e){ $("admin-log").textContent = `오류: ${e.message}`; }
+    }
+  </script>
+</body>
+</html>

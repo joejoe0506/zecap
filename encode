@@ -1,0 +1,33 @@
+import os
+import pickle
+import face_recognition
+from config import DATASET_DIR, ENCODINGS_DIR, ENCODING_EXT
+
+def encode_faces_for(student_id):
+    folder = os.path.join(DATASET_DIR, student_id)  # 학번 폴더 기준
+    if not os.path.exists(folder):
+        print(f"[ERROR] 폴더가 존재하지 않습니다: {folder}")
+        return
+
+    encodings = []
+
+    print(f"[INFO] 인코딩 시작: {student_id}의 얼굴 이미지 → 인코딩 생성")
+
+    for filename in sorted(os.listdir(folder)):
+        if filename.lower().endswith(".jpg"):
+            image_path = os.path.join(folder, filename)
+            image = face_recognition.load_image_file(image_path)
+            face_locations = face_recognition.face_locations(image)
+            if len(face_locations) != 1:
+                print(f"[WARNING] 얼굴이 없거나 여러명 감지됨: {filename}, 얼굴 수: {len(face_locations)}")
+                continue
+            encoding = face_recognition.face_encodings(image, face_locations)[0]
+            encodings.append(encoding)
+            print(f"[ENCODED] {filename}")
+
+    os.makedirs(ENCODINGS_DIR, exist_ok=True)
+    output_path = os.path.join(ENCODINGS_DIR, f"{student_id}{ENCODING_EXT}")  # 학번으로 저장
+    with open(output_path, "wb") as f:
+        pickle.dump(encodings, f)
+
+    print(f"[SUCCESS] 인코딩 완료: {student_id} → 총 {len(encodings)}개 인코딩 저장됨")

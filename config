@@ -1,0 +1,20 @@
+# config.py
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 원본 이미지(학습용) 저장 위치: dataset/이름/이미지.jpg
+DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+
+# 인코딩(pkl) 저장 위치: incode/이름.pkl
+ENCODINGS_DIR = os.path.join(BASE_DIR, "incode")
+
+# 인코딩 파일 확장자
+ENCODING_EXT = ".pkl"
+
+# 로그 폴더(이미 있으면 그대로 사용)
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+
+os.makedirs(DATASET_DIR, exist_ok=True)
+os.makedirs(ENCODINGS_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)

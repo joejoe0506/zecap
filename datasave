@@ -1,0 +1,172 @@
+from flask import Flask, Response
+from picamera2 import Picamera2
+import cv2
+import numpy as np
+import time
+
+app = Flask(__name__)
+
+# 📷 Picamera2 설정 (해상도 확대)
+picam2 = Picamera2()
+picam2.preview_configuration.main.size = (640, 480)
+picam2.preview_configuration.main.format = "YUV420"
+picam2.configure("preview")
+picam2.start()
+time.sleep(1)
+
+prev_center = None
+no_lane_count = 0
+latest_direction = "forward"
+
+# 📌 방향 판단
+def get_direction(smoothed_center, frame_width, tolerance=5):
+    center_ref = frame_width // 2
+    offset = smoothed_center - center_ref
+    print(f"[DEBUG] Offset: {offset}, Center: {smoothed_center}, Frame center: {center_ref}")
+
+    if abs(offset) < tolerance:
+        return "forward"
+    elif offset < 0:
+        return "left"
+    else:
+        return "right"
+
+# 📌 좌우 차선 선별
+def select_closest_lines(lines, width):
+    center_ref = width // 2
+    min_left_dist = float('inf')
+    min_right_dist = float('inf')
+    left_line = None
+    right_line = None
+
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        cx = (x1 + x2) // 2
+        dist = abs(cx - center_ref)
+
+        if cx < center_ref and dist < min_left_dist:
+            min_left_dist = dist
+            left_line = (x1, y1, x2, y2)
+        elif cx >= center_ref and dist < min_right_dist:
+            min_right_dist = dist
+            right_line = (x1, y1, x2, y2)
+
+    return left_line, right_line
+
+# 📌 프레임 처리
+def process_frame(frame, prev_center):
+    global no_lane_count
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, thresh = cv2.threshold(blur, 200, 255, cv2.THRESH_BINARY)
+    edges = cv2.Canny(thresh, 50, 150)
+
+    height, width = edges.shape
+
+    roi_corners = np.array([[
+        (int(width * 0.05), height),
+        (int(width * 0.2), int(height * 0.6)),
+        (int(width * 0.8), int(height * 0.6)),
+        (int(width * 0.95), height)
+    ]], dtype=np.int32)
+
+    mask = np.zeros_like(edges)
+    cv2.fillPoly(mask, roi_corners, 255)
+    masked_edges = cv2.bitwise_and(edges, mask)
+
+    lines = cv2.HoughLinesP(masked_edges, 1, np.pi / 180, threshold=50, minLineLength=50, maxLineGap=20)
+
+    result = frame.copy()
+    cv2.polylines(result, roi_corners, isClosed=True, color=(255, 255, 255), thickness=2)
+
+    center_x = width // 2
+    left_cx = None
+    right_cx = None
+
+    if lines is not None:
+        left_line, right_line = select_closest_lines(lines, width)
+
+        if left_line is not None:
+            x1, y1, x2, y2 = left_line
+            cv2.line(result, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            left_cx = (x1 + x2) // 2
+
+        if right_line is not None:
+            x1, y1, x2, y2 = right_line
+            cv2.line(result, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            right_cx = (x1 + x2) // 2
+
+        if left_cx is not None and right_cx is not None:
+            center_x = (left_cx + right_cx) // 2
+            no_lane_count = 0
+        elif left_cx is not None:
+            lane_offset = int((width // 2 - left_cx) * 0.9)
+            center_x = left_cx + lane_offset
+            no_lane_count = 0
+        elif right_cx is not None:
+            lane_offset = int((right_cx - width // 2) * 0.9)
+            center_x = right_cx - lane_offset
+            no_lane_count = 0
+        else:
+            no_lane_count += 1
+            center_x = prev_center if prev_center is not None else width // 2
+    else:
+        no_lane_count += 1
+        center_x = prev_center if prev_center is not None else width // 2
+
+    if prev_center is None:
+        smoothed_center = center_x
+    else:
+        smoothed_center = int(0.3 * prev_center + 0.7 * center_x)
+
+    # 중심선 표시
+    cv2.line(result, (smoothed_center, height), (smoothed_center, int(height * 0.5)), (0, 255, 255), 3)
+
+    return result, smoothed_center
+
+# 📌 프레임 스트리밍
+def gen_frames():
+    global prev_center, latest_direction
+
+    while True:
+        frame = picam2.capture_array("main")
+        frame = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
+
+        result, prev_center = process_frame(frame, prev_center)
+        latest_direction = get_direction(prev_center, frame.shape[1])
+
+        # 🔤 영상에 텍스트 표시
+        cv2.putText(result, f"Direction: {latest_direction}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+        _, buffer = cv2.imencode('.jpg', result)
+        frame = buffer.tobytes()
+
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+
+# 📌 영상 HTML 페이지
+@app.route('/')
+def index():
+    return '''
+    <html>
+        <head>
+            <title>Lane Detection</title>
+        </head>
+        <body>
+            <h2>차선 인식 실시간 영상</h2>
+            <img src="/video" width="800" height="600">
+        </body>
+    </html>
+    '''
+
+# 📌 영상 스트리밍 라우트
+@app.route('/video')
+def video():
+    return Response(gen_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+# 📌 서버 실행
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)

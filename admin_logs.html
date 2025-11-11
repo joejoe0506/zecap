@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>관리자 출석 로그</title>
+  <style>
+    body { font-family: sans-serif; margin: 40px; }
+    h1 { color: #333; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #aaa; padding: 8px; text-align: left; }
+    th { background: #eee; }
+    button { padding: 8px 16px; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <h1>📋 출석 로그 기록</h1>
+  <button onclick="loadLogs()">🔄 새로고침</button>
+  <table id="logTable">
+    <thead>
+      <tr>
+        <th>날짜</th>
+        <th>학번</th>
+        <th>이름</th>
+        <th>결과</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    async function loadLogs() {
+      const res = await fetch("/api/logs");
+      const data = await res.json();
+      const tbody = document.querySelector("#logTable tbody");
+      tbody.innerHTML = "";
+
+      if (!data.ok) {
+        alert("로그 불러오기 실패: " + data.message);
+        return;
+      }
+
+      let allLogs = data.logs.join("\n").split("\n").filter(line => line.trim() !== "");
+      for (const line of allLogs.reverse()) {
+        const m = line.match(/\[(.*?)\]\s+(\S+)\s+(\S+)\s+(OK|FAIL)/);
+        if (!m) continue;
+        const [_, ts, sid, name, status] = m;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${ts}</td>
+          <td>${sid}</td>
+          <td>${name}</td>
+          <td style="color:${status === 'OK' ? 'green' : 'red'}">${status}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    loadLogs();
+  </script>
+</body>
+</html>

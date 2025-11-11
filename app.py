@@ -1,4 +1,4 @@
-# app.py
+# app.py (원본 + 관리자 로그 페이지/엔드포인트 추가)
 import os
 import io
 import json
@@ -15,8 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 import cv2
 import face_recognition
+import ssl
 
-# ===== 너희 기존 모듈들과의 연결 (있으면 import, 없으면 데모 대체) =====
+# ===== 기존 db 모듈 연결 (없으면 간단 데모) =====
 try:
     from db import get_user, save_user, load_user_name_by_id
 except Exception:
@@ -37,7 +38,6 @@ except Exception:
         if os.path.exists(db_path):
             with open(db_path, "r", encoding="utf-8") as f:
                 arr = json.load(f)
-        # 중복 체크 간단 처리: 같은 user_id 또는 student_id면 덮어쓰기
         arr = [x for x in arr if not (x.get("user_id") == user_id or x.get("student_id") == student_id)]
         arr.append({
             "user_id": user_id, "password": password, "name": name,
@@ -59,19 +59,18 @@ except Exception:
 
 # ===== 경로/상수 =====
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FACES_DIR = os.path.join(BASE_DIR, "faces")      # 학생별 원본 이미지 저장
-ENC_DIR   = os.path.join(BASE_DIR, "encodings")  # 학생별 face encodings 저장(pickle)
+FACES_DIR = os.path.join(BASE_DIR, "faces")
+ENC_DIR   = os.path.join(BASE_DIR, "encodings")
 LOG_DIR   = os.path.join(BASE_DIR, "logs")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 os.makedirs(FACES_DIR, exist_ok=True)
 os.makedirs(ENC_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(STATIC_DIR, exist_ok=True)  # static 폴더 존재 보장
 
 # ===== 유틸: 인코딩 저장/로드 및 인식 =====
 def encode_student_folder(student_id: str):
-    """
-    faces/{student_id} 폴더의 모든 이미지 -> face_recognition encoding 추출 후 encodings/{student_id}.pkl 저장
-    """
     sid_dir = os.path.join(FACES_DIR, student_id)
     if not os.path.isdir(sid_dir):
         raise RuntimeError("해당 학생의 얼굴 폴더가 없습니다.")
@@ -83,7 +82,7 @@ def encode_student_folder(student_id: str):
         if img_bgr is None:
             continue
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        boxes = face_recognition.face_locations(img_rgb, model="hog")  # cpu 환경 우선
+        boxes = face_recognition.face_locations(img_rgb, model="hog")
         if not boxes:
             continue
         encs = face_recognition.face_encodings(img_rgb, boxes)
@@ -100,10 +99,9 @@ def load_student_encodings(student_id: str):
     if not os.path.exists(path):
         return None
     with open(path, "rb") as f:
-        return pickle.load(f)  # List[np.ndarray]
+        return pickle.load(f)
 
 def recognize_from_image(image_bgr: np.ndarray, student_id: str, tolerance: float = 0.5) -> bool:
-    """단일 업로드 이미지에서 student_id의 인코딩과 매칭되는지 확인"""
     encs = load_student_encodings(student_id)
     if not encs:
         return False
@@ -112,7 +110,6 @@ def recognize_from_image(image_bgr: np.ndarray, student_id: str, tolerance: floa
     if not boxes:
         return False
     unknowns = face_recognition.face_encodings(img_rgb, boxes)
-    # 하나라도 매칭되면 True
     for u in unknowns:
         matches = face_recognition.compare_faces(encs, u, tolerance=tolerance)
         if any(matches):
@@ -130,134 +127,141 @@ def write_attendance_log(student_id: str, name: str, ok: bool):
 # ===== FastAPI 초기화 =====
 app = FastAPI()
 
-# 정적 파일 (SPA)
-app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
-
-# 편의를 위한 CORS(동일 도메인에서만 쓸 거면 제한 가능)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 필요시 정확 도메인으로 제한
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------- 라우트 : 기존 업로드 기반 기능들 ----------
+# ===== 전역 예외 처리 =====
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    import traceback
+    print(f"Unhandled exception for {request.url}: {exc}")
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"ok": False, "message": "Internal Server Error"}
+    )
 
+# ===== 라우트 (JSON 보장) =====
 @app.get("/")
 def root():
-    # /static/index.html 제공
-    return FileResponse(os.path.join(BASE_DIR, "static", "index.html"))
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 @app.post("/api/login")
 async def api_login(payload: dict):
-    user_id = payload.get("user_id","")
-    password = payload.get("password","")
-    user = get_user(user_id, password)
-    if not user:
-        raise HTTPException(401, "아이디 또는 비밀번호가 올바르지 않습니다.")
-    # 실서비스에선 JWT/세션 발급. 여기선 데모로 dummy token.
-    return {
-        "ok": True,
-        "token": "dummy",
-        "name": user["name"],
-        "student_id": user["student_id"],
-        "is_admin": str(user["is_admin"]).lower() == "true" or bool(user["is_admin"])
-    }
+    try:
+        user_id = payload.get("user_id","")
+        password = payload.get("password","")
+        user = get_user(user_id, password)
+        if not user:
+            return JSONResponse(status_code=401, content={"ok": False, "message": "아이디 또는 비밀번호가 올바르지 않습니다."})
+        return {
+            "ok": True,
+            "token": "dummy",
+            "name": user["name"],
+            "student_id": user["student_id"],
+            "is_admin": str(user["is_admin"]).lower() == "true" or bool(user["is_admin"])
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(e)})
 
 @app.post("/api/register")
 async def api_register(
     meta: UploadFile = File(...),
     images: list[UploadFile] = File(default=[]),
 ):
-    """
-    meta: JSON (user_id, password, student_id, name, is_admin)
-    images: 얼굴 이미지 여러 장(JPEG)
-    """
     try:
         payload = json.loads((await meta.read()).decode("utf-8"))
-    except Exception:
-        raise HTTPException(400, "meta(JSON) 파싱 실패")
+        user_id = payload.get("user_id","").strip()
+        password = payload.get("password","")
+        student_id = payload.get("student_id","").strip()
+        name = payload.get("name","").strip()
+        is_admin = bool(payload.get("is_admin", False))
 
-    user_id = payload.get("user_id","").strip()
-    password = payload.get("password","")
-    student_id = payload.get("student_id","").strip()
-    name = payload.get("name","").strip()
-    is_admin = bool(payload.get("is_admin", False))
+        if not all([user_id, password, student_id, name]):
+            return JSONResponse(status_code=400, content={"ok": False, "message": "모든 항목을 입력해주세요."})
 
-    if not all([user_id, password, student_id, name]):
-        raise HTTPException(400, "모든 항목을 입력해주세요.")
+        save_user(user_id, password, name, student_id, is_admin)
 
-    # 사용자 저장(중복 처리 등은 db.py에서)
-    save_user(user_id, password, name, student_id, is_admin)
+        # 학생 폴더 생성 및 기존 사진 확인
+        sid_dir = os.path.join(FACES_DIR, student_id)
+        os.makedirs(sid_dir, exist_ok=True)
+        existing_files = len([f for f in os.listdir(sid_dir) if os.path.isfile(os.path.join(sid_dir,f))])
+        saved = 0
 
-    # 얼굴 이미지 저장
-    sid_dir = os.path.join(FACES_DIR, student_id)
-    os.makedirs(sid_dir, exist_ok=True)
-    saved = 0
-    for idx, file in enumerate(images):
-        content = await file.read()
-        if not content:
-            continue
-        img_array = np.frombuffer(content, np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        if img is None:
-            continue
-        # 간단 전처리(옵션): 얼굴이 실제로 보이는지 체크하고 싶다면 face_locations 검사 후만 저장
-        out = os.path.join(sid_dir, f"{idx:03d}.jpg")
-        cv2.imwrite(out, img)
-        saved += 1
+        for idx, file in enumerate(images):
+            content = await file.read()
+            if not content:
+                continue
+            img_array = np.frombuffer(content, np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            if img is None:
+                continue
+            out = os.path.join(sid_dir, f"{existing_files + idx:03d}.jpg")
+            cv2.imwrite(out, img)
+            saved += 1
 
-    if saved < 3:
-        raise HTTPException(400, "얼굴 이미지가 충분하지 않습니다. (최소 3장 권장)")
+        if saved + existing_files < 3:
+            return JSONResponse(status_code=400, content={"ok": False, "message": "얼굴 이미지가 충분하지 않습니다. (최소 3장 권장)"})
 
-    # 인코딩 생성(학생별 pkl)
-    encode_student_folder(student_id)
-    return {"ok": True, "saved": saved}
+        # 얼굴 인코딩 생성
+        encode_student_folder(student_id)
+        return {"ok": True, "saved": saved, "total": saved + existing_files}
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(e)})
 
 @app.post("/api/recognize")
 async def api_recognize(
     image: UploadFile = File(...),
     student_id: str = Form(default=""),
 ):
-    content = await image.read()
-    if not content:
-        raise HTTPException(400, "이미지 업로드가 비어있습니다.")
-    img_array = np.frombuffer(content, np.uint8)
-    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-    if frame is None:
-        raise HTTPException(400, "이미지 디코딩 실패")
+    try:
+        content = await image.read()
+        if not content:
+            return JSONResponse(status_code=400, content={"ok": False, "message": "이미지 업로드가 비어있습니다."})
+        img_array = np.frombuffer(content, np.uint8)
+        frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        if frame is None:
+            return JSONResponse(status_code=400, content={"ok": False, "message": "이미지 디코딩 실패"})
 
-    if not student_id:
-        raise HTTPException(400, "student_id 가 필요합니다.")
+        if not student_id:
+            return JSONResponse(status_code=400, content={"ok": False, "message": "student_id 가 필요합니다."})
 
-    matched = recognize_from_image(frame, student_id)
-    name = load_user_name_by_id(student_id) or "Unknown"
-    write_attendance_log(student_id, name, matched)
-    return {
-        "ok": True,
-        "matched": bool(matched),
-        "name": name,
-        "student_id": student_id
-    }
+        matched = recognize_from_image(frame, student_id)
+        name = load_user_name_by_id(student_id) or "Unknown"
+        write_attendance_log(student_id, name, matched)
+        return {
+            "ok": True,
+            "matched": bool(matched),
+            "name": name,
+            "student_id": student_id
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(e)})
 
 @app.get("/api/logs")
 def api_logs():
-    logs = []
-    if os.path.exists(LOG_DIR):
-        for fname in sorted(os.listdir(LOG_DIR)):
-            path = os.path.join(LOG_DIR, fname)
-            with open(path, "r", encoding="utf-8") as f:
-                logs.append(f.read())
-    return {"ok": True, "logs": logs}
+    try:
+        logs = []
+        if os.path.exists(LOG_DIR):
+            for fname in sorted(os.listdir(LOG_DIR)):
+                path = os.path.join(LOG_DIR, fname)
+                with open(path, "r", encoding="utf-8") as f:
+                    logs.append(f.read())
+        return {"ok": True, "logs": logs}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(e)})
 
-# ===== 라즈베리파이(서버) 카메라 관련 기능 추가 시작 =====
-
-# ===== Pi 카메라 전역 상태/설정 =====
-PI_CAM_INDEX = 0                 # 기본 카메라 인덱스 (필요시 1로 바꿔)
+# ===== Pi 카메라 관련 설정 =====
+PI_CAM_INDEX = 1
 PI_CAM_WIDTH = 640
 PI_CAM_HEIGHT = 480
-# OpenCV flag (플랫폼에 따라 CAP_V4L2 또는 0 사용)
 try:
     PI_CAM_OPEN_FLAGS = cv2.CAP_V4L2
 except Exception:
@@ -266,7 +270,6 @@ except Exception:
 _cam = None
 _cam_lock = threading.Lock()
 
-# ===== 라즈베리파이 카메라 유틸 =====
 def _open_pi_cam():
     global _cam
     if _cam is not None and _cam.isOpened():
@@ -274,14 +277,13 @@ def _open_pi_cam():
     cam = cv2.VideoCapture(PI_CAM_INDEX, PI_CAM_OPEN_FLAGS)
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, PI_CAM_WIDTH)
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, PI_CAM_HEIGHT)
-    # 카메라 웜업: 한 프레임 읽어보고 실패하면 예외
     ok, _ = cam.read()
     if not ok:
         try:
             cam.release()
         except Exception:
             pass
-        raise RuntimeError("라즈베리파이 카메라를 열 수 없습니다. 연결/권한/raspi-config 확인 필요")
+        raise RuntimeError("라즈베리파이 카메라를 열 수 없습니다.")
     _cam = cam
     return _cam
 
@@ -295,21 +297,17 @@ def _close_pi_cam():
         _cam = None
 
 def _grab_frame(timeout_sec: float = 2.0):
-    """
-    카메라에서 1프레임 캡처. timeout 내 실패 시 예외.
-    """
     start = time.time()
     while time.time() - start < timeout_sec:
         ok, frame = _cam.read() if _cam else (False, None)
         if ok and frame is not None:
+            print("프레임 획득 성공")
             return frame
+        print("프레임 획득 실패, 재시도 중...")
         time.sleep(0.02)
     raise RuntimeError("카메라 프레임 캡처 실패")
 
-def _capture_n_frames(n: int = 10, interval_ms: int = 120):
-    """
-    n장의 프레임을 캡처해서 리스트로 반환. 간격은 interval_ms.
-    """
+def _capture_n_frames(n: int = 20, interval_ms: int = 100):
     frames = []
     for _ in range(max(1, n)):
         frame = _grab_frame()
@@ -317,77 +315,169 @@ def _capture_n_frames(n: int = 10, interval_ms: int = 120):
         time.sleep(max(0, interval_ms) / 1000.0)
     return frames
 
-# ===== 카메라 직접 사용 API들 =====
-
 @app.post("/api/register_pi")
 async def api_register_pi(
     user_id: str = Form(...),
     password: str = Form(...),
-    student_id: str = Form(...),   # 여기서는 '이름' 또는 '학번' 등 식별자
+    student_id: str = Form(...),
+    name: str = Form(...),
+    is_admin: bool = Form(False),
+    num_frames: int = Form(30),
+    interval_ms: int = Form(100),
+):
+    try:
+        save_user(user_id, password, name, student_id, is_admin)
+        sid_dir = os.path.join(FACES_DIR, student_id)
+        os.makedirs(sid_dir, exist_ok=True)
+        saved = 0
+        with _cam_lock:
+            cam = _open_pi_cam()
+            try:
+                frames = _capture_n_frames(n=num_frames, interval_ms=interval_ms)
+                for idx, frame in enumerate(frames):
+                    out = os.path.join(sid_dir, f"{idx:03d}.jpg")
+                    cv2.imwrite(out, frame)
+                    saved += 1
+            finally:
+                _close_pi_cam()
+        if saved < 3:
+            return JSONResponse(status_code=400, content={"ok": False, "message": "얼굴 이미지가 충분하지 않습니다."})
+        encode_student_folder(student_id)
+        return {"ok": True, "saved": saved}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(e)})
+
+# -- 기존에 추가된 improved register_pi kept below (avoid duplicate route conflict) --
+@app.post("/api/register_pi")
+async def api_register_pi(
+    user_id: str = Form(...),
+    password: str = Form(...),
+    student_id: str = Form(...),
     name: str = Form(...),
     is_admin: bool = Form(False),
     num_frames: int = Form(10),
     interval_ms: int = Form(120),
 ):
-    """
-    서버(라즈베리파이) 카메라를 이용해 직접 촬영 후 등록.
-    기존 /api/register(브라우저 업로드 기반)와 병행 사용 가능.
-    """
-    # 1) 사용자 저장
-    save_user(user_id, password, name, student_id, is_admin)
+    try:
+        # 1. 유저 정보 DB에 저장
+        save_user(user_id, password, name, student_id, is_admin)
 
-    # 2) 카메라로 촬영해서 faces/{student_id}/ 에 저장
-    sid_dir = os.path.join(FACES_DIR, student_id)
-    os.makedirs(sid_dir, exist_ok=True)
+        # 2. 학생 폴더 생성 (기존 사진 유지)
+        sid_dir = os.path.join(FACES_DIR, student_id)
+        os.makedirs(sid_dir, exist_ok=True)
+        existing_files = len(os.listdir(sid_dir))
+        saved = 0
 
-    saved = 0
-    with _cam_lock:
-        cam = _open_pi_cam()
-        try:
-            frames = _capture_n_frames(n=num_frames, interval_ms=interval_ms)
-            for idx, frame in enumerate(frames):
-                out = os.path.join(sid_dir, f"{idx:03d}.jpg")
-                cv2.imwrite(out, frame)
-                saved += 1
-        finally:
-            # 안정성을 위해 카메라 닫기 (원하면 닫지 않고 유지 가능)
-            _close_pi_cam()
+        # 3. Pi 카메라로 사진 촬영
+        with _cam_lock:
+            cam = _open_pi_cam()
+            try:
+                frames = _capture_n_frames(n=num_frames, interval_ms=interval_ms)
+                for idx, frame in enumerate(frames):
+                    out = os.path.join(sid_dir, f"{existing_files + idx:03d}.jpg")
+                    cv2.imwrite(out, frame)
+                    saved += 1
+            finally:
+                _close_pi_cam()
 
-    if saved < 3:
-        raise HTTPException(400, "얼굴 이미지가 충분하지 않습니다. (최소 3장 권장)")
+        # 4. 사진이 최소 3장 이상인지 확인
+        if saved + existing_files < 3:
+            return JSONResponse(status_code=400, content={"ok": False, "message": "얼굴 이미지가 충분하지 않습니다."})
 
-    # 3) 인코딩 생성
-    encode_student_folder(student_id)
-    return {"ok": True, "saved": saved}
+        # 5. 얼굴 인코딩 생성
+        encode_student_folder(student_id)
 
-@app.post("/api/recognize_pi")
-async def api_recognize_pi(student_id: str = Form(...)):
-    """
-    서버(라즈베리파이) 카메라로 한 프레임 촬영하여 student_id 인식 시도
-    """
-    with _cam_lock:
-        cam = _open_pi_cam()
-        try:
-            frame = _grab_frame()
-        finally:
-            _close_pi_cam()
-
-    matched = recognize_from_image(frame, student_id)
-    name = load_user_name_by_id(student_id) or "Unknown"
-    write_attendance_log(student_id, name, matched)
-    return {"ok": True, "matched": bool(matched), "name": name, "student_id": student_id}
+        return {"ok": True, "saved": saved, "total": saved + existing_files}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(e)})
 
 @app.get("/api/cam_check")
 def api_cam_check():
-    with _cam_lock:
-        try:
+    try:
+        with _cam_lock:
             cam = _open_pi_cam()
             frame = _grab_frame()
             h, w = frame.shape[:2]
             return {"ok": True, "resolution": [w, h]}
-        except Exception as e:
-            return {"ok": False, "message": str(e)}
-        finally:
-            _close_pi_cam()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(e)})
+    finally:
+        _close_pi_cam()
 
-# ===== End of file =====
+# ===== 관리용 HTML 제공 및 로그 JSON API 추가 (여기서부터 새로 추가된 부분) =====
+
+@app.get("/admin_logs")
+def admin_page():
+    """
+    관리자용 출석 로그 페이지 제공.
+    static/admin_logs.html 파일을 프로젝트의 static/ 아래에 넣어주세요.
+    """
+    admin_html = os.path.join(STATIC_DIR, "admin_logs.html")
+    if not os.path.exists(admin_html):
+        return JSONResponse(status_code=404, content={"ok": False, "message": "admin_logs.html 이 static 폴더에 없습니다."})
+    return FileResponse(admin_html)
+
+@app.get("/api/admin/logs")
+def api_admin_logs():
+    try:
+        entries = []
+        if os.path.exists(LOG_DIR):
+            for fname in sorted(os.listdir(LOG_DIR), reverse=True):
+                path = os.path.join(LOG_DIR, fname)
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            if line.startswith("["):
+                                ts_part, rest = line.split("]", 1)
+                                ts = ts_part.strip("[]").strip()
+                                rest = rest.strip()
+                                parts = rest.split()
+                                student = parts[0] if len(parts) > 0 else ""
+                                name = parts[1] if len(parts) > 1 else ""
+                                status = parts[2] if len(parts) > 2 else ""
+                            else:
+                                ts = ""
+                                student = ""
+                                name = ""
+                                status = ""
+                            entries.append({
+                                "file": fname,
+                                "timestamp": ts,
+                                "student_id": student,
+                                "name": name,
+                                "status": status,
+                                "raw": line
+                            })
+                        except Exception:
+                            entries.append({
+                                "file": fname,
+                                "timestamp": "",
+                                "student_id": "",
+                                "name": "",
+                                "status": "",
+                                "raw": line
+                            })
+        return {"ok": True, "entries": entries}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(e)})
+
+# ===== SSL 인증서 자동 저장 폴더 설정 =====
+CERT_DIR = os.path.join(BASE_DIR, "certs")
+os.makedirs(CERT_DIR, exist_ok=True)
+
+CERT_FILE = os.path.join(CERT_DIR, "localhost+1.pem")
+KEY_FILE = os.path.join(CERT_DIR, "localhost+1-key.pem")
+
+if __name__ == "__main__":
+    import uvicorn
+    print(f"✅ 인증서 파일 경로: {CERT_FILE}")
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        ssl_keyfile=KEY_FILE,
+        ssl_certfile=CERT_FILE
+    )

@@ -1,202 +1,271 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>얼굴 인식 출석 시스템</title>
-  <style>
-    body { font-family: 'Noto Sans KR', sans-serif; background: #f4f4f4; margin: 0; padding: 0; text-align: center; }
-    h1 { background: #222; color: white; padding: 1rem 0; margin: 0 0 1rem 0; }
-    .card { background: white; padding: 20px; margin: 20px auto; border-radius: 10px; width: 90%; max-width: 400px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-    input, button { width: 90%; padding: 10px; margin: 5px; border-radius: 5px; border: 1px solid #ccc; }
-    video, canvas { display: block; margin: 10px auto; border-radius: 10px; }
-    .status { color: #333; margin-top: 10px; font-weight: bold; }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>얼굴 인식 출석 시스템</title>
+<style>
+  body { font-family: 'Noto Sans KR', sans-serif; background: #f4f4f4; margin: 0; padding: 0; text-align: center; }
+  h1 { background: #222; color: white; padding: 1rem 0; margin: 0 0 1rem 0; }
+  .card { background: white; padding: 20px; margin: 20px auto; border-radius: 10px; width: 90%; max-width: 400px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+  input, button { width: 90%; padding: 10px; margin: 5px; border-radius: 5px; border: 1px solid #ccc; }
+  video, canvas { display: block; margin: 10px auto; border-radius: 10px; }
+  .status { color: #333; margin-top: 10px; font-weight: bold; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
+  th { background-color: #eee; }
+  #admin-log-container { max-height: 300px; overflow-y: auto; margin-top: 10px; }
+</style>
 </head>
 <body>
 
-  <h1>얼굴 인식 출석 시스템</h1>
+<h1>얼굴 인식 출석 시스템</h1>
 
-  <!-- 로그인 -->
-  <div class="card" id="page-login">
-    <h2>로그인</h2>
-    <input id="login-id" placeholder="아이디"><br>
-    <input id="login-pw" type="password" placeholder="비밀번호"><br>
-    <button onclick="login()">로그인</button>
-    <button onclick="show('page-register')">회원가입</button>
-    <div class="status" id="login-status"></div>
+<!-- 로그인 -->
+<div class="card" id="page-login">
+  <h2>로그인</h2>
+  <input id="login-id" placeholder="아이디"><br>
+  <input id="login-pw" type="password" placeholder="비밀번호"><br>
+  <button onclick="login()">로그인</button>
+  <button onclick="show('page-register')">회원가입</button>
+  <div class="status" id="login-status"></div>
+</div>
+
+<div class="card" id="page-register" style="display:none;">
+  <h2>회원가입</h2>
+  <input id="reg-id" placeholder="아이디"><br>
+  <input id="reg-pw" type="password" placeholder="비밀번호"><br>
+  <input id="reg-sid" placeholder="학번 또는 이름"><br>
+  <input id="reg-name" placeholder="이름"><br>
+
+  <!-- 체크박스 + 텍스트 한 줄 중앙정렬 -->
+  <div style="display:inline-flex; align-items:center; margin-bottom:10px;">
+    <input type="checkbox" id="reg-admin" style="margin:0; padding:0;">
+    <label for="reg-admin" style="margin-left:4px; line-height:2; white-space:nowrap;">관리자 계정</label>
   </div>
 
-  <!-- 회원가입 -->
-  <div class="card" id="page-register" style="display:none;">
-    <h2>회원가입</h2>
-    <input id="reg-id" placeholder="아이디"><br>
-    <input id="reg-pw" type="password" placeholder="비밀번호"><br>
-    <input id="reg-sid" placeholder="학번 또는 이름"><br>
-    <input id="reg-name" placeholder="이름"><br>
-    <label><input type="checkbox" id="reg-admin"> 관리자 계정</label><br>
-    <video id="preview" autoplay playsinline width="320" height="240"></video>
-    <canvas id="frame" width="320" height="240" style="display:none;"></canvas><br>
-    <button onclick="startCamera()">카메라 켜기</button>
-    <button onclick="registerUser()">등록(브라우저 카메라)</button>
-    <button onclick="registerPi()">📸 라즈베리파이로 등록</button><br>
-    <button onclick="show('page-login')">로그인으로 돌아가기</button>
-    <div class="status" id="register-status"></div>
+  <video id="preview" autoplay playsinline width="320" height="240"></video>
+  <canvas id="frame" width="320" height="240" style="display:none;"></canvas><br>
+  <button onclick="startCamera()">카메라 켜기</button>
+  <button onclick="registerUser()">등록(브라우저 카메라)</button>
+  <button onclick="show('page-login')">로그인으로 돌아가기</button>
+  <div class="status" id="register-status"></div>
+</div>
+
+<!-- 출석 -->
+<div class="card" id="page-recog" style="display:none;">
+  <h2>출석 인식</h2>
+  <input id="recog-sid" placeholder="학번 또는 이름"><br>
+  <video id="preview2" autoplay playsinline width="320" height="240"></video>
+  <canvas id="frame2" width="320" height="240" style="display:none;"></canvas><br>
+  <button onclick="startCamera2()">카메라 켜기</button>
+  <button onclick="recognize()">출석(브라우저 카메라)</button>
+  <button onclick="show('page-login')">로그아웃</button>
+  <div class="status" id="recog-status"></div>
+</div>
+
+<!-- 관리자 로그 -->
+<div class="card" id="page-admin" style="display:none;">
+  <h2>관리자 출석 로그</h2>
+  <div id="admin-log-container">
+    <table id="admin-log-table">
+      <thead>
+        <tr>
+          <th>날짜</th>
+          <th>학번</th>
+          <th>이름</th>
+          <th>상태</th>
+        </tr>
+      </thead>
+      <tbody>
+      </tbody>
+    </table>
   </div>
+  <div id="logs_container"></div>
+  <button onclick="show('page-login')">로그아웃</button>
+</div>
 
-  <!-- 출석 -->
-  <div class="card" id="page-recog" style="display:none;">
-    <h2>출석 인식</h2>
-    <input id="recog-sid" placeholder="학번 또는 이름"><br>
-    <video id="preview2" autoplay playsinline width="320" height="240"></video>
-    <canvas id="frame2" width="320" height="240" style="display:none;"></canvas><br>
-    <button onclick="startCamera2()">카메라 켜기</button>
-    <button onclick="recognize()">출석(브라우저 카메라)</button>
-    <button onclick="recognizePi()">👁️ 라즈베리파이로 인식</button><br>
-    <button onclick="camCheck()">📷 카메라 상태 확인</button>
-    <button onclick="show('page-login')">로그아웃</button>
-    <div class="status" id="recog-status"></div>
-  </div>
+<script>
+const $ = (id) => document.getElementById(id);
+let stream1 = null, stream2 = null;
 
-  <script>
-    const $ = (id) => document.getElementById(id);
-    let stream1 = null, stream2 = null;
+function show(id) {
+  for (let div of document.querySelectorAll('.card')) div.style.display = 'none';
+  $(id).style.display = 'block';
+}
 
-    function show(id) {
-      for (let div of document.querySelectorAll('.card')) div.style.display = 'none';
-      $(id).style.display = 'block';
+// ------------------ 카메라 ------------------
+async function startCamera() {
+  if (stream1) return;
+  try {
+    stream1 = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+    $("preview").srcObject = stream1;
+  } catch (e) { $("register-status").innerText = "카메라 접근 실패: " + e.message; }
+}
+
+async function startCamera2() {
+  if (stream2) return;
+  try {
+    stream2 = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+    $("preview2").srcObject = stream2;
+  } catch (e) { $("recog-status").innerText = "카메라 접근 실패: " + e.message; }
+}
+
+function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Blob 변환 실패")), "image/jpeg");
+  });
+}
+
+async function captureFrames(video, canvas, count=5, interval=150) {
+  const ctx = canvas.getContext("2d");
+  const blobs = [];
+  for (let i = 0; i < count; i++) {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    try { blobs.push(await canvasToBlob(canvas)); } catch(e){ console.error(e); }
+    await new Promise(r=>setTimeout(r, interval));
+  }
+  return blobs;
+}
+
+// ------------------ 회원가입 ------------------
+async function registerUser() {
+  const user_id = $("reg-id").value.trim();
+  const password = $("reg-pw").value.trim();
+  const student_id = $("reg-sid").value.trim();
+  const name = $("reg-name").value.trim();
+  const is_admin = $("reg-admin").checked;
+  const status = $("register-status");
+  if (!user_id || !password || !student_id || !name) { status.innerText="모든 항목을 입력해주세요."; return; }
+  if (!stream1) { status.innerText="카메라를 먼저 켜세요."; return; }
+  status.innerText = "얼굴 촬영 중...";
+  const frames = await captureFrames($("preview"), $("frame"), 10, 120);
+  if (frames.length===0){status.innerText="촬영 실패";return;}
+  const form = new FormData();
+  form.append("meta", new Blob([JSON.stringify({user_id,password,student_id,name,is_admin})], { type:"application/json" }));
+  frames.forEach((b,i)=>form.append("images", b, `f${i}.jpg`));
+  try{
+    const res = await fetch("/api/register", { method:"POST", body: form });
+    const data = await res.json();
+    if (!res.ok) { status.innerText = data.detail || "등록 실패"; return; }
+    status.innerText = `등록 완료 (${data.saved}장 저장됨)`;
+  } catch(e) { status.innerText = "등록 오류: " + e.message; }
+}
+
+async function registerPi() {
+  const user_id = $("reg-id").value.trim();
+  const password = $("reg-pw").value.trim();
+  const student_id = $("reg-sid").value.trim();
+  const name = $("reg-name").value.trim();
+  const is_admin = $("reg-admin").checked;
+  const status = $("register-status");
+  status.innerText = "라즈베리파이 카메라로 촬영 중...";
+  const form = new FormData();
+  form.append("user_id", user_id);
+  form.append("password", password);
+  form.append("student_id", student_id);
+  form.append("name", name);
+  form.append("is_admin", is_admin);
+  form.append("num_frames", 10);
+  form.append("interval_ms", 120);
+  try{
+    const res = await fetch("/api/register_pi", { method:"POST", body: form });
+    const data = await res.json();
+    status.innerText = data.ok ? `등록 완료 (${data.saved}장 촬영)` : data.detail || "등록 실패";
+  } catch(e){ status.innerText = "등록 오류: " + e.message; }
+}
+
+// ------------------ 출석 ------------------
+async function recognize() {
+  const student_id = $("recog-sid").value.trim();
+  const status = $("recog-status");
+  if (!student_id) { status.innerText = "학번 또는 이름 입력"; return; }
+  if (!stream2) { status.innerText = "카메라를 먼저 켜세요."; return; }
+  status.innerText = "얼굴 인식 중...";
+  const frames = await captureFrames($("preview2"), $("frame2"), 1, 1);
+  if (frames.length === 0) { status.innerText = "촬영 실패"; return; }
+  const form = new FormData();
+  form.append("student_id", student_id);
+  form.append("image", frames[0], "f.jpg");
+  try {
+    const res = await fetch("/api/recognize", { method:"POST", body: form });
+    const data = await res.json();
+    if (!res.ok) { status.innerText = data.detail || "인식 실패"; return; }
+    status.innerText = data.matched ? `✅ ${data.name} 출석 완료!` : `❌ 얼굴 인식 실패`;
+  } catch(e) { status.innerText = "인식 오류: " + e.message; }
+}
+
+async function recognizePi() {
+  const student_id = $("recog-sid").value.trim();
+  const status = $("recog-status");
+  if (!student_id) { status.innerText = "학번 또는 이름 입력"; return; }
+  status.innerText = "라즈베리파이 카메라로 얼굴 인식 중...";
+  const form = new FormData();
+  form.append("student_id", student_id);
+  try {
+    const res = await fetch("/api/recognize_pi", { method:"POST", body: form });
+    const data = await res.json();
+    status.innerText = data.ok
+      ? (data.matched ? `✅ ${data.name} 출석 완료!` : `❌ 인식 실패`)
+      : data.detail || "인식 오류";
+  } catch(e) { status.innerText = "인식 오류: " + e.message; }
+}
+
+async function camCheck() {
+  const status = $("recog-status");
+  try {
+    const res = await fetch("/api/cam_check");
+    const data = await res.json();
+    status.innerText = data.ok
+      ? `📷 카메라 OK (${data.resolution[0]}x${data.resolution[1]})`
+      : `❌ 카메라 오류: ${data.message}`;
+  } catch(e) { status.innerText = "카메라 확인 오류: " + e.message; }
+}
+
+// ------------------ 관리자 로그 ------------------
+// 관리자 로그 불러오기 (텍스트 .log 파일 지원)
+async function loadAdminLogs() {
+    const res = await fetch("/api/admin/logs");
+    const data = await res.json();
+    if (!data.ok) {
+        console.error("로그 불러오기 실패", data.message);
+        return;
     }
+    const container = document.getElementById("logs_container");
+    container.innerHTML = "";
+    data.entries.forEach(e => {
+        const div = document.createElement("div");
+        div.textContent = `[${e.timestamp}] ${e.student_id} ${e.name} ${e.status}`;
+        container.appendChild(div);
+    });
+}
 
-    async function login() {
-      const user_id = $("login-id").value.trim();
-      const password = $("login-pw").value.trim();
-      const res = await fetch("/api/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id, password })
-      });
-      const data = await res.json();
-      if (!res.ok) { $("login-status").innerText = data.detail || "로그인 실패"; return; }
-      $("login-status").innerText = `${data.name}님 환영합니다!`;
-      setTimeout(()=>show("page-recog"), 800);
+// ------------------ 로그인 ------------------
+async function login() {
+  const user_id = $("login-id").value.trim();
+  const password = $("login-pw").value.trim();
+  try {
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id, password })
+    });
+    const data = await res.json();
+    if (!res.ok) { $("login-status").innerText = data.detail || "로그인 실패"; return; }
+
+    $("login-status").innerText = `${data.name}님 환영합니다!`;
+
+    if (data.is_admin) {
+      show("page-admin");
+      loadAdminLogs();
+    } else {
+      show("page-recog");
     }
+  } catch(e) {
+    $("login-status").innerText = "로그인 오류: " + e.message;
+  }
+}
+</script>
 
-    async function startCamera() {
-      if (stream1) return;
-      try {
-        stream1 = await navigator.mediaDevices.getUserMedia({ video: true });
-        $("preview").srcObject = stream1;
-      } catch (e) {
-        $("register-status").innerText = "카메라 접근 실패: " + e.message;
-      }
-    }
-
-    async function startCamera2() {
-      if (stream2) return;
-      try {
-        stream2 = await navigator.mediaDevices.getUserMedia({ video: true });
-        $("preview2").srcObject = stream2;
-      } catch (e) {
-        $("recog-status").innerText = "카메라 접근 실패: " + e.message;
-      }
-    }
-
-    async function captureFrames(video, canvas, count=5, interval=150) {
-      const ctx = canvas.getContext("2d");
-      const blobs = [];
-      for (let i = 0; i < count; i++) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg"));
-        blobs.push(blob);
-        await new Promise(r => setTimeout(r, interval));
-      }
-      return blobs;
-    }
-
-    async function registerUser() {
-      const user_id = $("reg-id").value.trim();
-      const password = $("reg-pw").value.trim();
-      const student_id = $("reg-sid").value.trim();
-      const name = $("reg-name").value.trim();
-      const is_admin = $("reg-admin").checked;
-      const status = $("register-status");
-      if (!user_id || !password || !student_id || !name) {
-        status.innerText = "모든 항목을 입력해주세요."; return;
-      }
-      if (!stream1) { status.innerText = "카메라를 먼저 켜세요."; return; }
-
-      status.innerText = "얼굴 촬영 중...";
-      const frames = await captureFrames($("preview"), $("frame"), 10, 120);
-      const form = new FormData();
-      form.append("meta", new Blob([JSON.stringify({user_id,password,student_id,name,is_admin})],{type:"application/json"}));
-      frames.forEach((b,i)=>form.append("images", b, `f${i}.jpg`));
-
-      const res = await fetch("/api/register", { method:"POST", body: form });
-      const data = await res.json();
-      if (!res.ok) { status.innerText = data.detail || "등록 실패"; return; }
-      status.innerText = `등록 완료 (${data.saved}장 저장됨)`;
-    }
-
-    async function registerPi() {
-      const user_id = $("reg-id").value.trim();
-      const password = $("reg-pw").value.trim();
-      const student_id = $("reg-sid").value.trim();
-      const name = $("reg-name").value.trim();
-      const is_admin = $("reg-admin").checked;
-      const status = $("register-status");
-      status.innerText = "라즈베리파이 카메라로 촬영 중...";
-      const form = new FormData();
-      form.append("user_id", user_id);
-      form.append("password", password);
-      form.append("student_id", student_id);
-      form.append("name", name);
-      form.append("is_admin", is_admin);
-      form.append("num_frames", 10);
-      form.append("interval_ms", 120);
-
-      const res = await fetch("/api/register_pi", { method:"POST", body: form });
-      const data = await res.json();
-      status.innerText = data.ok ? `등록 완료 (${data.saved}장 촬영)` : data.detail || "등록 실패";
-    }
-
-    async function recognize() {
-      const student_id = $("recog-sid").value.trim();
-      const status = $("recog-status");
-      if (!student_id) { status.innerText = "학번 또는 이름 입력"; return; }
-      if (!stream2) { status.innerText = "카메라를 먼저 켜세요."; return; }
-      status.innerText = "얼굴 인식 중...";
-      const frames = await captureFrames($("preview2"), $("frame2"), 1, 1);
-      const form = new FormData();
-      form.append("student_id", student_id);
-      form.append("image", frames[0], "f.jpg");
-      const res = await fetch("/api/recognize", { method:"POST", body: form });
-      const data = await res.json();
-      if (!res.ok) { status.innerText = data.detail || "인식 실패"; return; }
-      status.innerText = data.matched ? `✅ ${data.name} 출석 완료!` : `❌ 얼굴 인식 실패`;
-    }
-
-    async function recognizePi() {
-      const student_id = $("recog-sid").value.trim();
-      const status = $("recog-status");
-      if (!student_id) { status.innerText = "학번 또는 이름 입력"; return; }
-      status.innerText = "라즈베리파이 카메라로 얼굴 인식 중...";
-      const form = new FormData();
-      form.append("student_id", student_id);
-      const res = await fetch("/api/recognize_pi", { method:"POST", body: form });
-      const data = await res.json();
-      status.innerText = data.ok
-        ? (data.matched ? `✅ ${data.name} 출석 완료!` : `❌ 인식 실패`)
-        : data.detail || "인식 오류";
-    }
-
-    async function camCheck() {
-      const status = $("recog-status");
-      const res = await fetch("/api/cam_check");
-      const data = await res.json();
-      status.innerText = data.ok
-        ? `📷 카메라 OK (${data.resolution[0]}x${data.resolution[1]})`
-        : `❌ 카메라 오류: ${data.message}`;
-    }
-  </script>
 </body>
 </html>
